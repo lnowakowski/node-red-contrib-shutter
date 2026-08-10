@@ -1,0 +1,27 @@
+{
+    "name": "@lnowakowski/node-red-contrib-shutter",
+    "version": "0.0.1",
+    "description": "Roller shutter control node with position tracking, timed movement, and manual override detection",
+    "repository": "github:lnowakowski/node-red-contrib-shutter",
+    "author": "Lukasz Nowakowski",
+    "license": "MIT",
+    "keywords": [
+        "node-red",
+        "shutter",
+        "roller",
+        "blind",
+        "iot",
+        "smart-home",
+        "automation"
+    ],
+    "node-red": {
+        "version": ">=4.0.0",
+        "nodes": {
+            "shutter": "shutter.js"
+        }
+    },
+    "engines": {
+        "node": ">=20.0.0"
+    },
+    "dependencies": {}
+}

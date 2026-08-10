@@ -1,0 +1,219 @@
+<script type="text/javascript">
+    // Isolate the code in a function to avoid global variable leaks
+    (function () {
+        "use strict";
+
+        RED.nodes.registerType("shutter", {
+            category: "home automation",
+            color: "#DDAA99",
+            defaults: {
+                name: { value: "" },
+                deviceUp: {
+                    value: "",
+                    required: true,
+                    validate: RED.validators.typedInput("deviceUpType", false),
+                },
+                deviceUpType: { value: "str" },
+                deviceDown: {
+                    value: "",
+                    required: true,
+                    validate: RED.validators.typedInput("deviceDownType", false),
+                },
+                deviceDownType: { value: "str" },
+                durationUp: {
+                    value: "1000",
+                    required: true,
+                    validate: RED.validators.typedInput("durationUpType", false),
+                },
+                durationUpType: { value: "num" },
+                durationDown: {
+                    value: "1000",
+                    required: true,
+                    validate: RED.validators.typedInput("durationDownType", false),
+                },
+                durationDownType: { value: "num" },
+                identifier: {
+                    value: "",
+                    required: true,
+                    validate: RED.validators.typedInput("identifierType", false),
+                },
+                identifierType: { value: "str" },
+                logging: { value: false },
+            },
+            inputs: 1,
+            outputs: 2,
+            icon: "font-awesome/fa-window-maximize",
+            label: function () {
+                return this.name || (this.identifierType === "str" ? this.identifier : "") || "shutter";
+            },
+            paletteLabel: "shutter",
+            inputLabels: "command",
+            outputLabels: ["relay command", "status"],
+            oneditprepare: function () {
+                $("#node-input-deviceUp").typedInput({
+                    default: this.deviceUpType || "str",
+                    types: ["str", "msg", "flow", "global", "env"],
+                    typeField: $("#node-input-deviceUpType"),
+                });
+                $("#node-input-deviceDown").typedInput({
+                    default: this.deviceDownType || "str",
+                    types: ["str", "msg", "flow", "global", "env"],
+                    typeField: $("#node-input-deviceDownType"),
+                });
+                $("#node-input-durationUp").typedInput({
+                    default: this.durationUpType || "num",
+                    types: ["num", "msg", "flow", "global", "env"],
+                    typeField: $("#node-input-durationUpType"),
+                });
+                $("#node-input-durationDown").typedInput({
+                    default: this.durationDownType || "num",
+                    types: ["num", "msg", "flow", "global", "env"],
+                    typeField: $("#node-input-durationDownType"),
+                });
+                $("#node-input-identifier").typedInput({
+                    default: this.identifierType || "str",
+                    types: ["str", "msg", "flow", "global", "env"],
+                    typeField: $("#node-input-identifierType"),
+                });
+            },
+        });
+    })();
+</script>
+
+<script type="text/html" data-template-name="shutter">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-identifier"><i class="fa fa-bolt"></i> Identifier</label>
+        <input type="text" id="node-input-identifier" placeholder="e.g. living_room_shutter" />
+        <input type="hidden" id="node-input-identifierType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-deviceUp"><i class="fa fa-arrow-up"></i> Device up</label>
+        <input type="text" id="node-input-deviceUp" placeholder="Relay device for opening" />
+        <input type="hidden" id="node-input-deviceUpType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-deviceDown"><i class="fa fa-arrow-down"></i> Device down</label>
+        <input type="text" id="node-input-deviceDown" placeholder="Relay device for closing" />
+        <input type="hidden" id="node-input-deviceDownType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-durationUp"><i class="fa fa-clock-o"></i> Duration up (ms)</label>
+        <input type="text" id="node-input-durationUp" placeholder="1000" />
+        <input type="hidden" id="node-input-durationUpType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-durationDown"><i class="fa fa-clock-o"></i> Duration down (ms)</label>
+        <input type="text" id="node-input-durationDown" placeholder="1000" />
+        <input type="hidden" id="node-input-durationDownType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-logging"><i class="fa fa-file-text-o"></i> Logging</label>
+        <input type="checkbox" id="node-input-logging" style="width: auto; vertical-align: top;" />
+        <span> Enable debug logging</span>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="shutter">
+    <p>Controls a roller shutter (or blind) using two relay outputs, with
+    position tracking based on timed movement.</p>
+
+    <h3>Inputs</h3>
+    <dl class="message-properties">
+        <dt class="optional">direction
+            <span class="property-type">string</span>
+        </dt>
+        <dd><code>"up"</code> to open or <code>"down"</code> to close.
+        Triggers full movement in the given direction.</dd>
+        <dt class="optional">payload
+            <span class="property-type">integer</span>
+        </dt>
+        <dd>target position as a percentage (0–100). The node calculates the
+        required movement time and direction automatically.</dd>
+        <dt class="optional">get_status
+            <span class="property-type">any</span>
+        </dt>
+        <dd>when present (any value), the node responds with the current status
+        without moving the shutter.</dd>
+    </dl>
+
+    <h3>Outputs</h3>
+    <ol class="node-ports">
+        <li>Relay command
+            <dl class="message-properties">
+                <dt>topic <span class="property-type">string</span></dt>
+                <dd>the device identifier (up or down relay).</dd>
+                <dt>payload <span class="property-type">number</span></dt>
+                <dd><code>1</code> to energize the relay, <code>0</code> to release.</dd>
+                <dt>info <span class="property-type">string</span></dt>
+                <dd>human-readable state string, e.g. <code>"device_up=true"</code>.</dd>
+            </dl>
+        </li>
+        <li>Status
+            <dl class="message-properties">
+                <dt>payload.status <span class="property-type">string</span></dt>
+                <dd>current state: <code>"opening"</code>, <code>"closing"</code>,
+                <code>"closed"</code>, <code>"fully_opened"</code>, or <code>"opened"</code>.</dd>
+                <dt>payload.position <span class="property-type">number</span></dt>
+                <dd>current position from <code>0</code> (closed) to <code>1</code> (fully open).</dd>
+            </dl>
+        </li>
+    </ol>
+
+    <h3>Details</h3>
+    <p>This node controls a roller shutter that uses two separate relays — one
+    for the "up" motor direction and one for "down". Since there is no position
+    feedback from the hardware, the node <b>estimates position by timing</b> the
+    movement duration.</p>
+
+    <h4>Configuration</h4>
+    <p>All properties support dynamic sources (static value, <code>msg</code>,
+    flow context, global context, or environment variable):</p>
+    <ul>
+        <li><b>Identifier</b> — unique name for this shutter, used in global state tracking.</li>
+        <li><b>Device up / down</b> — relay device identifiers used as <code>msg.topic</code>
+        on the first output.</li>
+        <li><b>Duration up / down</b> — time in milliseconds for a full open or close cycle.</li>
+    </ul>
+
+    <h4>Movement modes</h4>
+    <ul>
+        <li><b>Direction mode</b>: Send <code>msg.direction = "up"</code> or <code>"down"</code>
+        to move fully in that direction. Sending the same command while moving <b>stops</b>
+        the shutter at its current position.</li>
+        <li><b>Position mode</b>: Send <code>msg.payload</code> as an integer (0–100)
+        to move to a specific percentage. The node calculates direction and duration.</li>
+    </ul>
+
+    <h4>Direction reversal</h4>
+    <p>If a command in the opposite direction arrives while the shutter is moving,
+    the node first stops the current relay, updates the estimated position, then
+    starts the new direction from the current position.</p>
+
+    <h4>Live status</h4>
+    <p>While moving, the node reports estimated position every 200ms on the second
+    output and updates the node status display with a live percentage.</p>
+
+    <h4>Global context</h4>
+    <p>The node maintains two global context entries:</p>
+    <ul>
+        <li><code>global.shutters</code> — persistent position map:
+        <code>{ "identifier": { position, changed } }</code></li>
+        <li><code>global.shutters_mem</code> — runtime state:
+        <code>{ unlimited: bool, active: [...] }</code></li>
+    </ul>
+    <p>Setting <code>global.shutters_mem.unlimited = true</code> disables position
+    limits (useful for calibration or shutters without end stops).</p>
+
+    <h4>Node status</h4>
+    <p>The node shows a green ring with position when idle, or a red ring with
+    direction and percentage while moving.</p>
+
+    <h3>References</h3>
+    <ul>
+        <li><a href="https://github.com/lnowakowski/node-red-contrib-shutter">GitHub</a> - the node's GitHub repository</li>
+    </ul>
+</script>
