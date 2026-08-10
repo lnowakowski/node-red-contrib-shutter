@@ -1,6 +1,6 @@
 {
     "name": "@lnowakowski/node-red-contrib-shutter",
-    "version": "0.0.1",
+    "version": "1.0.0",
     "description": "Roller shutter control node with position tracking, timed movement, and manual override detection",
     "repository": "github:lnowakowski/node-red-contrib-shutter",
     "author": "Lukasz Nowakowski",
