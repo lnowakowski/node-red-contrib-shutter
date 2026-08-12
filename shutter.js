@@ -15,7 +15,6 @@ module.exports = function (RED) {
         node.durationDownValue = config.durationDown;
         node.durationDownType = config.durationDownType || "num";
         node.identifierValue = config.identifier;
-        node.identifierType = config.identifierType || "str";
         node.logging = config.logging || false;
 
         // Relay command payloads (energize / release). Configurable type: num, str, or bool.
@@ -24,10 +23,12 @@ module.exports = function (RED) {
         node.payloadOffValue = config.payloadOff !== undefined ? config.payloadOff : "0";
         node.payloadOffType = config.payloadOffType || "num";
 
-        // Where the shutter state is persisted: "flow" or "global" context.
-        // Optional named context store (leave empty for the default store).
-        node.contextScope = config.contextScope || "global";
-        node.contextStore = config.contextStore || undefined;
+        // Context locations for persisted state and runtime coordination.
+        // Each is a flow/global context variable chosen via typed input.
+        node.statesHolder = RED.util.parseContextStore(config.statesHolder);
+        node.statesHolderType = config.statesHolderType || "flow";
+        node.runtimeHolder = RED.util.parseContextStore(config.runtimeHolder);
+        node.runtimeHolderType = config.runtimeHolderType || "flow";
 
         // Internal state
         let timer = null;
@@ -65,10 +66,8 @@ module.exports = function (RED) {
             return (num > 0) ? num : 1000;
         }
 
-        function resolveIdentifier(msg) {
-            return RED.util.evaluateNodeProperty(
-                node.identifierValue, node.identifierType, node, msg
-            );
+        function resolveIdentifier() {
+            return node.identifierValue;
         }
 
         function resolvePayload(state, msg) {
@@ -82,36 +81,20 @@ module.exports = function (RED) {
             );
         }
 
-        // ── Context helpers (flow or global, per node config) ──
-
-        function getCtx() {
-            return node.contextScope === "flow"
-                ? node.context().flow
-                : node.context().global;
+        function statesGet() {
+            return node.context()[node.statesHolderType].get(node.statesHolder.key, node.statesHolder.store) || {};
         }
 
-        function ctxGet(key) {
-            const ctx = getCtx();
-            return node.contextStore
-                ? ctx.get(key, node.contextStore)
-                : ctx.get(key);
-        }
-
-        function ctxSet(key, val) {
-            const ctx = getCtx();
-            if (node.contextStore) {
-                ctx.set(key, val, node.contextStore);
-            } else {
-                ctx.set(key, val);
-            }
+        function statesSet(val) {
+            node.context()[node.statesHolderType].set(node.statesHolder.key, val, node.statesHolder.store);
         }
 
         function getShuttersConfig() {
-            return ctxGet("shutters-config") || { unlimited: false, active: [] };
+            return node.context()[node.runtimeHolderType].get(node.runtimeHolder.key, node.runtimeHolder.store) || { unlimited: false, active: [] };
         }
 
         function setShuttersConfig(val) {
-            ctxSet("shutters-config", val);
+            node.context()[node.runtimeHolderType].set(node.runtimeHolder.key, val, node.runtimeHolder.store);
         }
 
         function isUnlimited() {
@@ -119,21 +102,21 @@ module.exports = function (RED) {
         }
 
         function updateGlobalStates(msg) {
-            const states = ctxGet("shutters") || {};
-            const id = resolveIdentifier(msg);
+            const states = statesGet();
+            const id = resolveIdentifier();
 
             if (id) {
                 states[id] = {
                     position: progress,
                     changed: Date.now(),
                 };
-                ctxSet("shutters", states);
+                statesSet(states);
             }
         }
 
         function getStoredPosition(msg) {
-            const states = ctxGet("shutters") || {};
-            const id = resolveIdentifier(msg);
+            const states = statesGet();
+            const id = resolveIdentifier();
 
             if (id && states[id] && typeof states[id].position === "number") {
                 return states[id].position;

@@ -32,12 +32,7 @@
                     validate: RED.validators.typedInput("durationDownType", false),
                 },
                 durationDownType: { value: "num" },
-                identifier: {
-                    value: "",
-                    required: true,
-                    validate: RED.validators.typedInput("identifierType", false),
-                },
-                identifierType: { value: "str" },
+                identifier: { value: "" },
                 payloadOn: {
                     value: "1",
                     required: true,
@@ -50,15 +45,25 @@
                     validate: RED.validators.typedInput("payloadOffType", false),
                 },
                 payloadOffType: { value: "num" },
-                contextScope: { value: "global" },
-                contextStore: { value: "" },
+                statesHolder: {
+                    value: "shutters",
+                    required: true,
+                    validate: RED.validators.typedInput("statesHolderType", false),
+                },
+                statesHolderType: { value: "flow" },
+                runtimeHolder: {
+                    value: "shutters_runtime",
+                    required: true,
+                    validate: RED.validators.typedInput("runtimeHolderType", false),
+                },
+                runtimeHolderType: { value: "flow" },
                 logging: { value: false },
             },
             inputs: 1,
             outputs: 2,
             icon: "font-awesome/fa-window-maximize",
             label: function () {
-                return this.name || (this.identifierType === "str" ? this.identifier : "") || "shutter";
+                return this.name || "shutter" + (this.identifier ? ` (${this.identifier})` : "");
             },
             paletteLabel: "shutter",
             inputLabels: "command",
@@ -84,11 +89,6 @@
                     types: ["num", "msg", "flow", "global", "env"],
                     typeField: $("#node-input-durationDownType"),
                 });
-                $("#node-input-identifier").typedInput({
-                    default: this.identifierType || "str",
-                    types: ["str", "msg", "flow", "global", "env"],
-                    typeField: $("#node-input-identifierType"),
-                });
                 $("#node-input-payloadOn").typedInput({
                     default: this.payloadOnType || "num",
                     types: ["num", "str", "bool"],
@@ -99,21 +99,16 @@
                     types: ["num", "str", "bool"],
                     typeField: $("#node-input-payloadOffType"),
                 });
-
-                // Populate the context store dropdown from Node-RED settings.
-                var storeField = $("#node-input-contextStore");
-                storeField.empty();
-                storeField.append($("<option></option>").val("").text("(default)"));
-                try {
-                    var ctxSettings = RED.settings.context;
-                    var stores = (ctxSettings && ctxSettings.stores) || [];
-                    stores.forEach(function (store) {
-                        storeField.append($("<option></option>").val(store).text(store));
-                    });
-                } catch (e) {
-                    // RED.settings.context may be unavailable; keep just the default.
-                }
-                storeField.val(this.contextStore || "");
+                $("#node-input-statesHolder").typedInput({
+                    default: this.statesHolderType || "flow",
+                    types: ["flow", "global"],
+                    typeField: $("#node-input-statesHolderType"),
+                });
+                $("#node-input-runtimeHolder").typedInput({
+                    default: this.runtimeHolderType || "flow",
+                    types: ["flow", "global"],
+                    typeField: $("#node-input-runtimeHolderType"),
+                });
             },
         });
     })();
@@ -127,7 +122,6 @@
     <div class="form-row">
         <label for="node-input-identifier"><i class="fa fa-bolt"></i> Identifier</label>
         <input type="text" id="node-input-identifier" placeholder="e.g. living_room_shutter" />
-        <input type="hidden" id="node-input-identifierType" />
     </div>
     <div class="form-row">
         <label for="node-input-deviceUp"><i class="fa fa-arrow-up"></i> Device up</label>
@@ -160,15 +154,14 @@
         <input type="hidden" id="node-input-payloadOffType" />
     </div>
     <div class="form-row">
-        <label for="node-input-contextScope"><i class="fa fa-database"></i> Context</label>
-        <select id="node-input-contextScope" style="width:70%;">
-            <option value="global">Global</option>
-            <option value="flow">Flow</option>
-        </select>
+        <label for="node-input-statesHolder"><i class="fa fa-database"></i> States</label>
+        <input type="text" id="node-input-statesHolder" placeholder="context store for last states" />
+        <input type="hidden" id="node-input-statesHolderType" />
     </div>
     <div class="form-row">
-        <label for="node-input-contextStore"><i class="fa fa-hdd-o"></i> Store</label>
-        <select id="node-input-contextStore" style="width:70%;"></select>
+        <label for="node-input-runtimeHolder"><i class="fa fa-database"></i> Runtime</label>
+        <input type="text" id="node-input-runtimeHolder" placeholder="context store for runtime data" />
+        <input type="hidden" id="node-input-runtimeHolderType" />
     </div>
     <div class="form-row">
         <label for="node-input-logging"><i class="fa fa-file-text-o"></i> Logging</label>
@@ -226,16 +219,21 @@
     movement duration.</p>
 
     <h4>Configuration</h4>
-    <p>All properties support dynamic sources (static value, <code>msg</code>,
-    flow context, global context, or environment variable):</p>
     <ul>
-        <li><b>Identifier</b> — unique name for this shutter, used in global state tracking.</li>
+        <li><b>Identifier</b> — unique name for this shutter (plain string), used
+        as the key under which its position is stored in the <b>States</b> context.</li>
         <li><b>Device up / down</b> — relay device identifiers used as <code>msg.topic</code>
-        on the first output.</li>
-        <li><b>Duration up / down</b> — time in milliseconds for a full open or close cycle.</li>
+        on the first output. Support dynamic sources (static value, <code>msg</code>,
+        flow, global, or environment variable).</li>
+        <li><b>Duration up / down</b> — time in milliseconds for a full open or
+        close cycle. Support the same dynamic sources as the devices.</li>
         <li><b>Payload on / off</b> — value sent on the first output to energize
         (on) or release (off) the relay. Type can be number, string, or boolean
         (defaults <code>1</code> / <code>0</code> as numbers).</li>
+        <li><b>States</b> — flow or global context variable holding the persistent
+        position map for all shutters (default <code>shutters</code>).</li>
+        <li><b>Runtime</b> — flow or global context variable holding runtime
+        coordination state (default <code>shutters_runtime</code>).</li>
     </ul>
 
     <h4>Movement</h4>
@@ -252,19 +250,18 @@
     output and updates the node status display with a live percentage.</p>
 
     <h4>Context</h4>
-    <p>The node persists its state in either <b>flow</b> or <b>global</b> context,
-    selectable via the <b>Context</b> dropdown. An optional named <b>Store</b> can
-    be chosen when multiple context stores are configured in Node-RED
-    (<code>settings.js</code>); leave it as <code>(default)</code> to use the
-    default store. Two entries are maintained under the chosen scope/store:</p>
+    <p>The node stores its data in two context variables, each configurable as a
+    <b>flow</b> or <b>global</b> context value via typed input:</p>
     <ul>
-        <li><code>shutters</code> — persistent position map:
+        <li><b>States</b> (default <code>shutters</code>) — persistent position map:
         <code>{ "identifier": { position, changed } }</code></li>
-        <li><code>shutters-config</code> — runtime state:
+        <li><b>Runtime</b> (default <code>shutters_runtime</code>) — runtime state:
         <code>{ unlimited: bool, active: [...] }</code></li>
     </ul>
-    <p>Setting <code>shutters-config.unlimited = true</code> disables position
-    limits (useful for calibration or shutters without end stops).</p>
+    <p>Multiple shutter nodes sharing the same <b>States</b> and <b>Runtime</b>
+    variables coordinate their positions and active-movement tracking. Setting
+    the runtime <code>unlimited = true</code> disables position limits (useful for
+    calibration or shutters without end stops).</p>
 
     <h4>Node status</h4>
     <p>The node shows a green ring with position when idle, or a red ring with

@@ -33,18 +33,18 @@ Restart Node-RED after installation.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| Identifier | string | _(required)_ | Unique name for this shutter (used as the key in context state) |
+| Identifier | string | _(required)_ | Unique name for this shutter (used as its key in the States context) |
 | Device up | string | _(required)_ | Relay device identifier for the "open" direction |
 | Device down | string | _(required)_ | Relay device identifier for the "close" direction |
 | Duration up | number | `1000` | Time in milliseconds for a full open cycle |
 | Duration down | number | `1000` | Time in milliseconds for a full close cycle |
 | Payload on | number \| string \| bool | `1` | Value sent on output 1 to energize the relay |
 | Payload off | number \| string \| bool | `0` | Value sent on output 1 to release the relay |
-| Context | `flow` \| `global` | `global` | Context scope where shutter state is persisted |
-| Store | string | _(default)_ | Named context store to use (leave empty for the default store) |
+| States | flow \| global | `shutters` (flow) | Context variable holding the persistent position map |
+| Runtime | flow \| global | `shutters_runtime` (flow) | Context variable holding runtime coordination state |
 | Logging | boolean | `false` | Enable debug logging to Node-RED debug sidebar |
 
-The Identifier, Device, and Duration properties support dynamic value sources via typed inputs:
+The Device and Duration properties support dynamic value sources via typed inputs:
 
 | Source | Description |
 |--------|-------------|
@@ -54,7 +54,7 @@ The Identifier, Device, and Duration properties support dynamic value sources vi
 | `global` | Read from global context |
 | `env` | Read from an environment variable |
 
-The **Payload on / off** values accept a static number, string, or boolean. **Context** and **Store** are fixed selections, not dynamic inputs.
+The **Identifier** is a plain string. The **Payload on / off** values accept a static number, string, or boolean. **States** and **Runtime** are each selected as a `flow` or `global` context variable.
 
 ## How It Works
 
@@ -123,12 +123,13 @@ While moving, status messages are emitted every **200ms** with live position est
 
 ## Context
 
-The node maintains shared state for coordination across multiple shutter nodes.
-The context **scope** (`flow` or `global`) and an optional named **store** are
-configurable per node in the editor; the keys below live under the chosen
-scope/store.
+The node maintains shared state for coordination across multiple shutter nodes,
+stored in two context variables configured per node: **States** (persistent
+position map) and **Runtime** (runtime coordination state). Each is a `flow` or
+`global` context variable. Nodes that point at the same variables coordinate with
+each other.
 
-### `shutters` (persistent)
+### States (default `shutters`, persistent)
 
 Position map for all shutters:
 
@@ -139,7 +140,7 @@ Position map for all shutters:
 }
 ```
 
-### `shutters-config` (runtime)
+### Runtime (default `shutters_runtime`)
 
 Runtime coordination state:
 
