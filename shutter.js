@@ -18,6 +18,17 @@ module.exports = function (RED) {
         node.identifierType = config.identifierType || "str";
         node.logging = config.logging || false;
 
+        // Relay command payloads (energize / release). Configurable type: num, str, or bool.
+        node.payloadOnValue = config.payloadOn !== undefined ? config.payloadOn : "1";
+        node.payloadOnType = config.payloadOnType || "num";
+        node.payloadOffValue = config.payloadOff !== undefined ? config.payloadOff : "0";
+        node.payloadOffType = config.payloadOffType || "num";
+
+        // Where the shutter state is persisted: "flow" or "global" context.
+        // Optional named context store (leave empty for the default store).
+        node.contextScope = config.contextScope || "global";
+        node.contextStore = config.contextStore || undefined;
+
         // Internal state
         let timer = null;
         let statusInterval = null;
@@ -60,16 +71,47 @@ module.exports = function (RED) {
             );
         }
 
-        // ── Global context helpers ──
+        function resolvePayload(state, msg) {
+            if (state) {
+                return RED.util.evaluateNodeProperty(
+                    node.payloadOnValue, node.payloadOnType, node, msg
+                );
+            }
+            return RED.util.evaluateNodeProperty(
+                node.payloadOffValue, node.payloadOffType, node, msg
+            );
+        }
+
+        // ── Context helpers (flow or global, per node config) ──
+
+        function getCtx() {
+            return node.contextScope === "flow"
+                ? node.context().flow
+                : node.context().global;
+        }
+
+        function ctxGet(key) {
+            const ctx = getCtx();
+            return node.contextStore
+                ? ctx.get(key, node.contextStore)
+                : ctx.get(key);
+        }
+
+        function ctxSet(key, val) {
+            const ctx = getCtx();
+            if (node.contextStore) {
+                ctx.set(key, val, node.contextStore);
+            } else {
+                ctx.set(key, val);
+            }
+        }
 
         function getShuttersConfig() {
-            const ctx = node.context().global;
-            return ctx.get("shutters_mem") || { unlimited: false, active: [] };
+            return ctxGet("shutters-config") || { unlimited: false, active: [] };
         }
 
         function setShuttersConfig(val) {
-            const ctx = node.context().global;
-            ctx.set("shutters_mem", val);
+            ctxSet("shutters-config", val);
         }
 
         function isUnlimited() {
@@ -77,8 +119,7 @@ module.exports = function (RED) {
         }
 
         function updateGlobalStates(msg) {
-            const ctx = node.context().global;
-            const states = ctx.get("shutters") || {};
+            const states = ctxGet("shutters") || {};
             const id = resolveIdentifier(msg);
 
             if (id) {
@@ -86,8 +127,18 @@ module.exports = function (RED) {
                     position: progress,
                     changed: Date.now(),
                 };
-                ctx.set("shutters", states);
+                ctxSet("shutters", states);
             }
+        }
+
+        function getStoredPosition(msg) {
+            const states = ctxGet("shutters") || {};
+            const id = resolveIdentifier(msg);
+
+            if (id && states[id] && typeof states[id].position === "number") {
+                return states[id].position;
+            }
+            return null;
         }
 
         function trackActive(device, state) {
@@ -194,7 +245,7 @@ module.exports = function (RED) {
             return {
                 topic: device,
                 info: device + "=" + state,
-                payload: state ? 1 : 0,
+                payload: resolvePayload(state, msg),
             };
         }
 
@@ -253,7 +304,7 @@ module.exports = function (RED) {
 
         function log(text) {
             if (node.logging) {
-                node.warn(text);
+                node.log(text);
             }
         }
 
@@ -261,8 +312,17 @@ module.exports = function (RED) {
 
         node.on("input", function (msg, send, done) {
             const UNLIMITED = isUnlimited();
-            let position = -1;
-            let isOpening = msg.direction === "up";
+            let isOpening = false;
+
+            // When idle, sync in-memory position from persisted context so the
+            // "already at position" check and movement timing survive restarts
+            // and stay consistent with the stored flow/global state.
+            if (timer === null && moveTimestamp === null) {
+                const stored = getStoredPosition(msg);
+                if (stored !== null) {
+                    progress = stored;
+                }
+            }
 
             // Status query
             if (msg.get_status !== undefined) {
@@ -273,19 +333,20 @@ module.exports = function (RED) {
                 return;
             }
 
-            // Percentage-based positioning
-            if (msg.direction === undefined && msg.payload !== undefined && Number.isInteger(msg.payload)) {
-                position = msg.payload;
+            // Only integer percentage payloads (0–100) are actionable.
+            if (msg.payload === undefined || !Number.isInteger(msg.payload)) {
+                node.warn("shutter: expected an integer payload between 0 and 100");
+                if (done) done();
+                return;
+            }
 
-                if (target === -1) {
-                    log("set open to " + position + "%");
-                }
+            if (target === -1) {
+                log("set open to " + msg.payload + "%");
+            }
 
-                position = position / 100;
-
-                if (position !== progress) {
-                    isOpening = position >= progress;
-                }
+            const position = msg.payload / 100;
+            if (position !== progress) {
+                isOpening = position >= progress;
             }
 
             let device;
@@ -298,12 +359,9 @@ module.exports = function (RED) {
             }
 
             const wasOpening = opening;
-            const changeDirection = wasOpening !== isOpening && !UNLIMITED;
-            let time;
-
             opening = isOpening;
 
-            // If currently moving, stop first
+            // If currently moving, stop at the current position first.
             if (timer) {
                 clearTimeout(timer);
 
@@ -335,79 +393,51 @@ module.exports = function (RED) {
                     { payload: statusObj.external },
                 ]);
 
-                // Handle direction change (relay switch needs a new command)
-                if (changeDirection && position < 0) {
-                    let dur2;
-                    try {
-                        dur2 = resolveDuration(isOpening, msg);
-                    } catch (e) {
-                        node.error("Failed to resolve duration: " + e.message, msg);
-                        if (done) done(e);
-                        return;
-                    }
+                if (done) done();
+                return;
+            }
 
-                    time = Math.round(progress * dur2);
-                    if (isOpening) {
-                        time = dur2 - time;
-                    }
+            // Not currently moving - start new movement to the target position.
+            let dur;
+            try {
+                dur = resolveDuration(isOpening, msg);
+            } catch (e) {
+                node.error("Failed to resolve duration: " + e.message, msg);
+                if (done) done(e);
+                return;
+            }
 
-                    log(device + ": change, time=" + time + ", " + (isOpening ? "opening" : "closing"));
-                    startMovement(device, time, isOpening, msg);
-
-                    if (done) done();
-                    return;
-                }
+            let time;
+            if (position !== progress || UNLIMITED) {
+                time = (!UNLIMITED ? Math.abs(progress - position) : 1) * dur;
+                isOpening = position >= progress;
+                opening = isOpening;
+                device = resolveDevice(isOpening, msg);
+                target = position;
             } else {
-                // Not currently moving - start new movement
-                let dur;
-                try {
-                    dur = resolveDuration(isOpening, msg);
-                } catch (e) {
-                    node.error("Failed to resolve duration: " + e.message, msg);
-                    if (done) done(e);
-                    return;
-                }
+                log(device + ": already at " + (position * 100) + "%");
+                updateGlobalStates(msg);
 
-                if (position < 0) {
-                    // Direction-based: move fully in that direction
-                    time = progress * dur;
-                    if (isOpening) {
-                        time = dur - time;
-                    }
-                } else {
-                    // Position-based: move to target
-                    if (position !== progress || UNLIMITED) {
-                        time = (!UNLIMITED ? Math.abs(progress - position) : 1) * dur;
-                        isOpening = position >= progress;
-                        opening = isOpening;
-                        device = resolveDevice(isOpening, msg);
-                        target = position;
-                    } else {
-                        log(device + ": already at " + (position * 100) + "%");
-                        updateGlobalStates(msg);
+                const statusObj = buildStatus(false, false);
+                applyStatus(statusObj);
+                sendStatus(statusObj);
 
-                        const statusObj = buildStatus(false, false);
-                        applyStatus(statusObj);
-                        sendStatus(statusObj);
+                if (done) done();
+                return;
+            }
 
-                        if (done) done();
-                        return;
-                    }
-                }
+            time = Math.round(time);
+            log(device + ": time=" + time + ", progress=" + (progress * 100).toFixed(2) + "%");
 
-                time = Math.round(time);
-                log(device + ": time=" + time + ", progress=" + (progress * 100).toFixed(2) + "%");
+            if (time > 0 && (UNLIMITED || (isOpening && progress < 1) || (!isOpening && progress > 0))) {
+                startMovement(device, time, isOpening, msg);
+            } else {
+                log(device + ": already fully " + (isOpening ? "opened" : "closed"));
+                updateGlobalStates(msg);
 
-                if (time > 0 && (UNLIMITED || (isOpening && progress < 1) || (!isOpening && progress > 0))) {
-                    startMovement(device, time, isOpening, msg);
-                } else {
-                    log(device + ": already fully " + (isOpening ? "opened" : "closed"));
-                    updateGlobalStates(msg);
-
-                    const statusObj = buildStatus(false, false);
-                    applyStatus(statusObj);
-                    sendStatus(statusObj);
-                }
+                const statusObj = buildStatus(false, false);
+                applyStatus(statusObj);
+                sendStatus(statusObj);
             }
 
             if (done) done();

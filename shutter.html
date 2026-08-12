@@ -38,6 +38,20 @@
                     validate: RED.validators.typedInput("identifierType", false),
                 },
                 identifierType: { value: "str" },
+                payloadOn: {
+                    value: "1",
+                    required: true,
+                    validate: RED.validators.typedInput("payloadOnType", false),
+                },
+                payloadOnType: { value: "num" },
+                payloadOff: {
+                    value: "0",
+                    required: true,
+                    validate: RED.validators.typedInput("payloadOffType", false),
+                },
+                payloadOffType: { value: "num" },
+                contextScope: { value: "global" },
+                contextStore: { value: "" },
                 logging: { value: false },
             },
             inputs: 1,
@@ -75,6 +89,31 @@
                     types: ["str", "msg", "flow", "global", "env"],
                     typeField: $("#node-input-identifierType"),
                 });
+                $("#node-input-payloadOn").typedInput({
+                    default: this.payloadOnType || "num",
+                    types: ["num", "str", "bool"],
+                    typeField: $("#node-input-payloadOnType"),
+                });
+                $("#node-input-payloadOff").typedInput({
+                    default: this.payloadOffType || "num",
+                    types: ["num", "str", "bool"],
+                    typeField: $("#node-input-payloadOffType"),
+                });
+
+                // Populate the context store dropdown from Node-RED settings.
+                var storeField = $("#node-input-contextStore");
+                storeField.empty();
+                storeField.append($("<option></option>").val("").text("(default)"));
+                try {
+                    var ctxSettings = RED.settings.context;
+                    var stores = (ctxSettings && ctxSettings.stores) || [];
+                    stores.forEach(function (store) {
+                        storeField.append($("<option></option>").val(store).text(store));
+                    });
+                } catch (e) {
+                    // RED.settings.context may be unavailable; keep just the default.
+                }
+                storeField.val(this.contextStore || "");
             },
         });
     })();
@@ -111,6 +150,27 @@
         <input type="hidden" id="node-input-durationDownType" />
     </div>
     <div class="form-row">
+        <label for="node-input-payloadOn"><i class="fa fa-toggle-on"></i> Payload on</label>
+        <input type="text" id="node-input-payloadOn" placeholder="Relay energize value" />
+        <input type="hidden" id="node-input-payloadOnType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-payloadOff"><i class="fa fa-toggle-off"></i> Payload off</label>
+        <input type="text" id="node-input-payloadOff" placeholder="Relay release value" />
+        <input type="hidden" id="node-input-payloadOffType" />
+    </div>
+    <div class="form-row">
+        <label for="node-input-contextScope"><i class="fa fa-database"></i> Context</label>
+        <select id="node-input-contextScope" style="width:70%;">
+            <option value="global">Global</option>
+            <option value="flow">Flow</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-contextStore"><i class="fa fa-hdd-o"></i> Store</label>
+        <select id="node-input-contextStore" style="width:70%;"></select>
+    </div>
+    <div class="form-row">
         <label for="node-input-logging"><i class="fa fa-file-text-o"></i> Logging</label>
         <input type="checkbox" id="node-input-logging" style="width: auto; vertical-align: top;" />
         <span> Enable debug logging</span>
@@ -123,11 +183,6 @@
 
     <h3>Inputs</h3>
     <dl class="message-properties">
-        <dt class="optional">direction
-            <span class="property-type">string</span>
-        </dt>
-        <dd><code>"up"</code> to open or <code>"down"</code> to close.
-        Triggers full movement in the given direction.</dd>
         <dt class="optional">payload
             <span class="property-type">integer</span>
         </dt>
@@ -146,8 +201,9 @@
             <dl class="message-properties">
                 <dt>topic <span class="property-type">string</span></dt>
                 <dd>the device identifier (up or down relay).</dd>
-                <dt>payload <span class="property-type">number</span></dt>
-                <dd><code>1</code> to energize the relay, <code>0</code> to release.</dd>
+                <dt>payload <span class="property-type">number | string | boolean</span></dt>
+                <dd>the configured <b>Payload on</b> value to energize the relay,
+                or <b>Payload off</b> value to release it (defaults <code>1</code> / <code>0</code>).</dd>
                 <dt>info <span class="property-type">string</span></dt>
                 <dd>human-readable state string, e.g. <code>"device_up=true"</code>.</dd>
             </dl>
@@ -177,35 +233,37 @@
         <li><b>Device up / down</b> — relay device identifiers used as <code>msg.topic</code>
         on the first output.</li>
         <li><b>Duration up / down</b> — time in milliseconds for a full open or close cycle.</li>
+        <li><b>Payload on / off</b> — value sent on the first output to energize
+        (on) or release (off) the relay. Type can be number, string, or boolean
+        (defaults <code>1</code> / <code>0</code> as numbers).</li>
     </ul>
 
-    <h4>Movement modes</h4>
-    <ul>
-        <li><b>Direction mode</b>: Send <code>msg.direction = "up"</code> or <code>"down"</code>
-        to move fully in that direction. Sending the same command while moving <b>stops</b>
-        the shutter at its current position.</li>
-        <li><b>Position mode</b>: Send <code>msg.payload</code> as an integer (0–100)
-        to move to a specific percentage. The node calculates direction and duration.</li>
-    </ul>
-
-    <h4>Direction reversal</h4>
-    <p>If a command in the opposite direction arrives while the shutter is moving,
-    the node first stops the current relay, updates the estimated position, then
-    starts the new direction from the current position.</p>
+    <h4>Movement</h4>
+    <p>Send <code>msg.payload</code> as an integer percentage (0–100) to move to
+    a specific position. The node calculates the direction (open or close) and the
+    movement time automatically, and does nothing if the shutter is already at the
+    requested position. Non-integer payloads are ignored with a warning.</p>
+    <p>If a command arrives while the shutter is already moving, the node stops the
+    active relay and updates the estimated position; send a new position afterwards
+    to continue.</p>
 
     <h4>Live status</h4>
     <p>While moving, the node reports estimated position every 200ms on the second
     output and updates the node status display with a live percentage.</p>
 
-    <h4>Global context</h4>
-    <p>The node maintains two global context entries:</p>
+    <h4>Context</h4>
+    <p>The node persists its state in either <b>flow</b> or <b>global</b> context,
+    selectable via the <b>Context</b> dropdown. An optional named <b>Store</b> can
+    be chosen when multiple context stores are configured in Node-RED
+    (<code>settings.js</code>); leave it as <code>(default)</code> to use the
+    default store. Two entries are maintained under the chosen scope/store:</p>
     <ul>
-        <li><code>global.shutters</code> — persistent position map:
+        <li><code>shutters</code> — persistent position map:
         <code>{ "identifier": { position, changed } }</code></li>
-        <li><code>global.shutters_mem</code> — runtime state:
+        <li><code>shutters-config</code> — runtime state:
         <code>{ unlimited: bool, active: [...] }</code></li>
     </ul>
-    <p>Setting <code>global.shutters_mem.unlimited = true</code> disables position
+    <p>Setting <code>shutters-config.unlimited = true</code> disables position
     limits (useful for calibration or shutters without end stops).</p>
 
     <h4>Node status</h4>

@@ -4,19 +4,19 @@
 [![Node.js](https://img.shields.io/badge/Node.js->=20-green?logo=nodedotjs)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A Node-RED node for controlling roller shutters (blinds) via two relay outputs (up/down), with time-based position tracking, percentage-based targeting, direction reversal, and live status reporting.
+A Node-RED node for controlling roller shutters (blinds) via two relay outputs (up/down), with time-based position tracking, percentage-based targeting, and live status reporting.
 
 ## Features
 
 - Two-relay motor control (separate up/down relays)
 - Time-based position estimation (no hardware feedback required)
 - Percentage-based positioning (move to 0–100%)
-- Direction-based commands (open/close fully)
-- Automatic direction reversal handling
+- Skips movement when already at the requested position
 - Live position reporting every 200ms while moving
-- Global state coordination across multiple shutters
+- State coordination across multiple shutters (flow or global context)
 - "Unlimited" mode for calibration
-- All properties support dynamic sources (str, msg, flow, global, env)
+- Configurable relay payloads (number, string, or boolean)
+- Device, duration, and identifier support dynamic sources (str/num, msg, flow, global, env)
 - No external dependencies
 
 ## Installation
@@ -33,14 +33,18 @@ Restart Node-RED after installation.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| Identifier | string | _(required)_ | Unique name for this shutter (used in global state) |
+| Identifier | string | _(required)_ | Unique name for this shutter (used as the key in context state) |
 | Device up | string | _(required)_ | Relay device identifier for the "open" direction |
 | Device down | string | _(required)_ | Relay device identifier for the "close" direction |
 | Duration up | number | `1000` | Time in milliseconds for a full open cycle |
 | Duration down | number | `1000` | Time in milliseconds for a full close cycle |
+| Payload on | number \| string \| bool | `1` | Value sent on output 1 to energize the relay |
+| Payload off | number \| string \| bool | `0` | Value sent on output 1 to release the relay |
+| Context | `flow` \| `global` | `global` | Context scope where shutter state is persisted |
+| Store | string | _(default)_ | Named context store to use (leave empty for the default store) |
 | Logging | boolean | `false` | Enable debug logging to Node-RED debug sidebar |
 
-All properties (except Logging) support dynamic value sources via typed inputs:
+The Identifier, Device, and Duration properties support dynamic value sources via typed inputs:
 
 | Source | Description |
 |--------|-------------|
@@ -50,14 +54,15 @@ All properties (except Logging) support dynamic value sources via typed inputs:
 | `global` | Read from global context |
 | `env` | Read from an environment variable |
 
+The **Payload on / off** values accept a static number, string, or boolean. **Context** and **Store** are fixed selections, not dynamic inputs.
+
 ## How It Works
 
 ```
                    ┌──────────────────────────────────┐
                    │            shutter               │
- direction:"up" ──▶│                                  │──▶ Output 1: relay cmd
- or payload:75  ──▶│  Status: opening (42% open)      │──▶ Output 2: status
-                   │                                  │
+    payload:75  ──▶│  Status: opening (42% open)      │──▶ Output 1: relay cmd
+                   │                                  │──▶ Output 2: status
                    └──────────────────────────────────┘
 ```
 
@@ -71,16 +76,6 @@ Since typical roller shutters don't provide position feedback, this node **estim
 
 ### Movement Modes
 
-#### Direction mode
-
-Send `msg.direction` as `"up"` or `"down"`:
-
-```json
-{ "direction": "up" }
-```
-
-The shutter moves fully in that direction. If already moving, sending a command **stops** at the current position. Sending the opposite direction triggers a reversal.
-
 #### Position mode
 
 Send `msg.payload` as an integer percentage (0–100):
@@ -89,7 +84,9 @@ Send `msg.payload` as an integer percentage (0–100):
 { "payload": 75 }
 ```
 
-The node calculates the required direction and movement time automatically.
+The node calculates the required direction and movement time automatically, and
+does nothing if the shutter is already at the requested position. Non-integer
+payloads are ignored with a warning.
 
 #### Status query
 
@@ -99,13 +96,11 @@ Send a message with `get_status` property (any value) to get current status with
 { "get_status": true }
 ```
 
-### Direction Reversal
+### Interrupting a movement
 
-When a command arrives in the opposite direction while moving:
-
-1. The current relay is turned **off**
-2. Position is updated based on elapsed time
-3. The new direction relay is turned **on** with the calculated remaining time
+If a command arrives while the shutter is already moving, the current relay is
+turned **off** and the estimated position is updated based on elapsed time. Send
+a new target position afterwards to continue moving.
 
 ## Outputs
 
@@ -114,7 +109,7 @@ When a command arrives in the opposite direction while moving:
 | Property | Type | Description |
 |----------|------|-------------|
 | `msg.topic` | string | Device identifier (up or down relay) |
-| `msg.payload` | number | `1` = energize relay, `0` = release |
+| `msg.payload` | number \| string \| bool | Configurable **Payload on** (energize) / **Payload off** (release) values, default `1` / `0` |
 | `msg.info` | string | e.g. `"device_up=true"` |
 
 ### Output 2 — Status
@@ -126,11 +121,14 @@ When a command arrives in the opposite direction while moving:
 
 While moving, status messages are emitted every **200ms** with live position estimates.
 
-## Global Context
+## Context
 
-The node maintains shared state for coordination across multiple shutter nodes:
+The node maintains shared state for coordination across multiple shutter nodes.
+The context **scope** (`flow` or `global`) and an optional named **store** are
+configurable per node in the editor; the keys below live under the chosen
+scope/store.
 
-### `global.shutters` (persistent)
+### `shutters` (persistent)
 
 Position map for all shutters:
 
@@ -141,7 +139,7 @@ Position map for all shutters:
 }
 ```
 
-### `global.shutters_mem` (runtime)
+### `shutters-config` (runtime)
 
 Runtime coordination state:
 
@@ -160,7 +158,7 @@ An example flow is included in the `examples/` folder and available in the Node-
 
 ```json
 [
-    { "id": "i1", "type": "inject", "payload": "{\"direction\":\"up\"}", "payloadType": "json", "wires": [["s1"]] },
+    { "id": "i1", "type": "inject", "payload": "100", "payloadType": "num", "wires": [["s1"]] },
     { "id": "i2", "type": "inject", "payload": "50", "payloadType": "num", "wires": [["s1"]] },
     { "id": "s1", "type": "shutter", "identifier": "living_room", "deviceUp": "relay_up_1", "deviceDown": "relay_down_1", "durationUp": "20000", "durationDown": "18000", "wires": [["mqtt1"], ["debug1"]] },
     { "id": "mqtt1", "type": "mqtt out", "topic": "" },
